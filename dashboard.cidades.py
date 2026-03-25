@@ -14,8 +14,6 @@ from datetime import datetime
 import os
 import glob
 import base64
-import requests
-from io import BytesIO
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,9 +27,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Link de Download Direto do Google Drive
-GDRIVE_FILE_ID = "1QCa7GX6z2SJNINK2c1G9TelULaSA0LTJ"
-EXCEL_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
+# CORREÇÃO 3: Caminho do arquivo Excel (caminho relativo)
+EXCEL_FILE_PATH = "Dashboard Cidades.xlsx"
 
 # Paleta de Cores Personalizada (Gradiente Amarelo, Detalhes Azul-Petróleo)
 PRIMARY_GRADIENT = "linear-gradient(90deg, #FFD700 0%, #FFA500 100%)"  # Gradiente amarelo
@@ -242,21 +239,19 @@ class ODSDataManager:
     """Classe responsável pelo gerenciamento e carregamento de dados"""
     
     # CORREÇÃO 2: Adicionando cache de dados
-    @st.cache_data(ttl=600)
+    @st.cache_data
     @staticmethod
     def load_data() -> Dict[str, Any]:
         """Carrega dados do arquivo Excel com mapeamento correto de colunas"""
         try:
-            logger.info("Fazendo download da planilha do Google Drive...")
-            
-            # Faz o download da planilha online
-            resposta = requests.get(EXCEL_URL)
-            if resposta.status_code != 200:
-                st.error("❌ Não foi possível ler a planilha do Google Drive. O link está público?")
+            if not os.path.exists(EXCEL_FILE_PATH):
+                st.error(f"❌ Arquivo não encontrado: {EXCEL_FILE_PATH}")
                 return {}
             
-            # Ler o arquivo baixado diretamente para a memória do site
-            excel_data = pd.read_excel(BytesIO(resposta.content), sheet_name=None)
+            logger.info(f"Carregando dados do arquivo: {EXCEL_FILE_PATH}")
+            
+            # Carregar todas as abas
+            excel_data = pd.read_excel(EXCEL_FILE_PATH, sheet_name=None)
             
             # Processar cada aba
             df_ods = ODSDataManager._process_ods_municipios(excel_data.get('ODS_Municipios', pd.DataFrame()))
@@ -287,12 +282,12 @@ class ODSDataManager:
                 'ods_completo': df_ods_completo,
                 'raw_data': excel_data,
                 'last_update': datetime.now(),
-                'file_path': 'Google Drive (Nuvem)',
-                'file_modified_time': datetime.now()
+                'file_path': EXCEL_FILE_PATH,
+                'file_modified_time': os.path.getmtime(EXCEL_FILE_PATH) if os.path.exists(EXCEL_FILE_PATH) else None
             }
         
         except Exception as e:
-            st.error(f"❌ Erro ao carregar dados do Drive: {str(e)}")
+            st.error(f"❌ Erro ao carregar dados: {str(e)}")
             logger.error(f"Erro no carregamento: {str(e)}")
             return {}
     
@@ -1188,6 +1183,12 @@ class DashboardComponents:
             border-left: 4px solid {PRIMARY_COLOR};
             margin-bottom: 1rem;
             transition: transform 0.2s ease;
+            height: 280px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
         }}
         
         .kpi-card:hover {{
@@ -1200,6 +1201,7 @@ class DashboardComponents:
             color: #666;
             margin-bottom: 0.5rem;
             font-weight: 600;
+            text-align: center;
         }}
         
         .kpi-value {{
@@ -1207,11 +1209,13 @@ class DashboardComponents:
             font-weight: bold;
             margin-bottom: 0.25rem;
             color: {PRIMARY_COLOR};
+            text-align: center;
         }}
         
         .kpi-subtitle {{
             font-size: 1rem;
             color: #888;
+            text-align: center;
         }}
         
         /* TAREFA 2: KPI Card especial para Projeto Bússola com melhorias visuais */
@@ -1830,11 +1834,9 @@ def render_sidebar(data: Dict[str, Any]) -> Tuple[str, str]:
         st.sidebar.error("❌ Nenhum estado encontrado")
         return "", ""
     
-    # CORREÇÃO 1: Usar session_state para manter seleção
     selected_estado = st.sidebar.selectbox(
         "🗺️ Selecione o Estado:",
         estados,
-        index=estados.index(st.session_state.get('selected_estado', estados[0])) if st.session_state.get('selected_estado') in estados else 0,
         key="selected_estado_selectbox"
     )
     
@@ -1844,15 +1846,14 @@ def render_sidebar(data: Dict[str, Any]) -> Tuple[str, str]:
         st.sidebar.error(f"❌ Nenhum município encontrado para {selected_estado}")
         return selected_estado, ""
     
-    # CORREÇÃO 1: Usar session_state para manter seleção
-    # Verificar se o município selecionado ainda é válido para o estado
-    previous_municipio = st.session_state.get('selected_municipio', municipios[0])
-    default_index = municipios.index(previous_municipio) if previous_municipio in municipios else 0
+    # Limpar município salvo se não pertence ao estado selecionado
+    if 'selected_municipio_selectbox' in st.session_state:
+        if st.session_state.selected_municipio_selectbox not in municipios:
+            del st.session_state['selected_municipio_selectbox']
     
     selected_municipio = st.sidebar.selectbox(
         "🏙️ Selecione o Município:",
         municipios,
-        index=default_index,
         key="selected_municipio_selectbox"
     )
     
@@ -1887,7 +1888,7 @@ def render_ids_ods_tab():
     with col1:
         st.markdown(DashboardComponents.render_kpi_card(
             "📊 IDS (Indicadores de Desenvolvimento Sustentável)",
-            "Painel de Controle",  # CORREÇÃO 1: DE "Painel de guerrilha" PARA "Painel de Controle"
+            "Momento Atual",
             "Função: Painel de Controle<br>Objetivo: Medir e comprovar avanços<br>Pergunta-chave: \"Onde estamos ?\"",
             PRIMARY_COLOR
         ), unsafe_allow_html=True)
@@ -1896,7 +1897,7 @@ def render_ids_ods_tab():
     with col2:
         st.markdown(DashboardComponents.render_kpi_card(
             "🎯 ODS (Objetivos de Desenvolvimento Sustentável)",
-            "Plano Estratégico",
+            "Lugar Ideal",
             "Função: Plano Estratégico Municipal<br>Objetivo: Definir visão de futuro<br>Pergunta-chave: \"Aonde queremos chegar?\"",  # CORREÇÃO 2: Subtítulo completo
             PRIMARY_COLOR
         ), unsafe_allow_html=True)
@@ -1907,7 +1908,7 @@ def render_ids_ods_tab():
     with col3:
         st.markdown(DashboardComponents.render_kpi_card(
             "📈 M-DLIS (Monitoramento de Desenvolvimento Local Integrado e Sustentável)",
-            "Sistema de Avaliação",
+            "Monitoramento das Soluções",
             "Função: Avaliação contínua<br>Objetivo: Monitorar indicadores-chave<br>Pergunta-chave: \"Como provamos nosso progresso?\"",
             PRIMARY_COLOR
         ), unsafe_allow_html=True)
@@ -1916,7 +1917,7 @@ def render_ids_ods_tab():
     with col4:
         st.markdown(DashboardComponents.render_kpi_card(
             "🌱 SDS (Soluções de Desenvolvimento Sustentável)",
-            "Ferramentas Práticas",  # CORREÇÃO 3: DE "Ferramentas" PARA "Ferramentas Práticas"
+            "Soluções Para o Ideal",
             "Função: Implementação de soluções<br>Objetivo: Converter teoria em prática<br>Pergunta-chave: \"Como fazer acontecer?\"",
             PRIMARY_COLOR
         ), unsafe_allow_html=True)
@@ -2550,10 +2551,7 @@ def main():
         st.session_state.dashboard_data = None
     if 'selected_ods' not in st.session_state:
         st.session_state.selected_ods = None
-    if 'selected_estado' not in st.session_state:
-        st.session_state.selected_estado = None
-    if 'selected_municipio' not in st.session_state:
-        st.session_state.selected_municipio = None
+
     
     # Carregar dados
     if st.session_state.dashboard_data is None:
@@ -2565,24 +2563,11 @@ def main():
     if not data:
         st.stop()
     
-    # CORREÇÃO 1: Renderizar sidebar e obter seleções do session_state
     selected_estado, selected_municipio = render_sidebar(data)
-    
-    # Atualizar session_state com as seleções atuais (sem modificar diretamente)
-    # Em vez de modificar st.session_state.selected_estado, usamos as variáveis locais
-    # O estado é mantido pelos widgets com keys únicas
     
     if not selected_municipio:
         st.error("❌ Selecione um município na barra lateral")
         st.stop()
-    
-    # CORREÇÃO 1: Lógica inteligente para verificar se o município é válido para o estado
-    municipios_do_estado = ODSDataManager.get_municipios_by_estado(data, selected_estado)
-    if selected_municipio not in municipios_do_estado:
-        # Se o município não é válido para o estado, selecionar o primeiro da lista
-        if municipios_do_estado:
-            st.session_state.selected_municipio = municipios_do_estado[0]
-            st.rerun()
     
     # Criar abas principais - NOVAS ABAS ADICIONADAS
     tab_names = ["🧭 IDS e ODS", "💡 Vantagens Estratégicas", "🎯 Visão Geral", "📊 ODS Detalhado", "🔄 Análise Comparativa", "🏗️ Método WELL"]
